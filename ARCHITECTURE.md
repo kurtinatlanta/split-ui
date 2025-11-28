@@ -27,7 +27,6 @@ interface AppState {
   isProcessing: boolean
   currentIntent: Intent | null
   panelMode: 'context' | 'task-ui'
-  taskUIType: 'add-task' | 'list-tasks' | 'complete-task' | 'none'
 
   // Persistent state (survives page refresh)
   messages: Message[]
@@ -50,15 +49,17 @@ interface AppState {
 
 ### 2. Intent Detection System
 
-**Technology:** Claude API with tool use (structured outputs)
+**Technology:** Claude API with tool use (structured outputs) + Intent Registry
 
 **Flow:**
 
 ```
 User types message
     ↓
+Registry generates tools dynamically (getIntentTools())
+    ↓
 Parallel API calls:
-    ├─ detectIntent() → Uses tool_use to extract structured data
+    ├─ detectIntent() → Claude calls the appropriate intent tool
     └─ generateResponse() → Creates conversational response
     ↓
 Update state with both results
@@ -66,32 +67,37 @@ Update state with both results
 Auto-transition to task UI (if high confidence)
 ```
 
-**Tool Definition Pattern:**
+**Registry-Based Tool Generation Pattern:**
 
 ```typescript
-{
-  name: 'detect_intent',
-  input_schema: {
+// Intent definitions are registered in src/registry/
+export const addTask: IntentDefinition = {
+  name: 'add_task',
+  description: 'Create a new task with optional due date and priority',
+  component: AddTaskUI,
+  entities: {
+    type: 'object',
     properties: {
-      intent: { enum: ['add_task', 'list_tasks', 'complete_task', 'none'] },
-      confidence: { type: 'number' },
-      entities: {
-        // Intent-specific entities
-        title: { type: 'string' },      // for add_task
-        dueDate: { type: 'string' },    // for add_task
-        priority: { enum: [...] },       // for add_task
-        filter: { enum: [...] },         // for list_tasks
-        taskIdentifier: { type: 'string' } // for complete_task
-      }
-    }
+      title: { type: 'string', description: 'Task title' },
+      dueDate: { type: 'string', description: 'Due date in natural language' },
+      priority: { type: 'string', enum: ['low', 'medium', 'high'] }
+    },
+    required: ['title']
   }
-}
+};
+
+// Tools are auto-generated from all registered intents
+const tools = getIntentTools();
+// → Returns array of Anthropic tools, one per registered intent
+// → Each tool has the intent name, description, and entity schema
 ```
 
 **Why this pattern works:**
-- **Structured extraction:** Claude returns JSON, not free text
-- **Confidence thresholding:** Only act on high-confidence intents (>0.7)
-- **Entity flexibility:** Different intents extract different entities
+- **One tool per intent:** Claude calls the specific intent tool (not a generic detect_intent)
+- **Self-contained definitions:** Each intent bundles its UI component + schema + description
+- **Type-safe:** Proper TypeScript types throughout (no `as any` casts)
+- **DRY principle:** Entity schema defined once, used for both API and UI
+- **Easy extensibility:** Add new intent = create one file + one registration line
 - **Parallel execution:** Don't block conversation while detecting intent
 
 **Production considerations:**
@@ -105,28 +111,30 @@ Auto-transition to task UI (if high confidence)
 
 ### 3. Dynamic Panel System
 
-**Pattern:** Context-first, then UI
+**Pattern:** Context-first, then UI (with Registry Lookup)
 
 ```
 State Flow:
-currentIntent + confidence → panelMode + taskUIType
+currentIntent → Registry Lookup → panelMode → Component Render
 ```
 
 **States:**
 
-| Panel Mode | Task UI Type | What User Sees |
-|------------|--------------|----------------|
-| `context` | `none` | Welcome state / conversation summary |
-| `context` | `add-task` | Intent display + countdown timer |
-| `task-ui` | `add-task` | Task creation form |
-| `task-ui` | `list-tasks` | Task list with checkboxes |
-| `task-ui` | `complete-task` | Task selector |
+| Panel Mode | Current Intent | What User Sees |
+|------------|----------------|----------------|
+| `context` | `null` | Welcome state / conversation summary |
+| `context` | `{ name: 'add_task', ... }` | Intent display + countdown timer |
+| `task-ui` | `{ name: 'add_task', ... }` | AddTaskUI component (from registry) |
+| `task-ui` | `{ name: 'list_tasks', ... }` | ListTasksUI component (from registry) |
+| `task-ui` | `{ name: 'complete_task', ... }` | CompleteTaskUI component (from registry) |
 
 **Auto-switching Logic:**
 
 ```typescript
 // Trigger: High confidence intent detected
-if (confidence >= 0.8 && taskUIType !== 'none') {
+const intentDef = getIntent(currentIntent.name);
+
+if (currentIntent.confidence >= 0.8 && intentDef) {
   // Show context panel first (user sees what was detected)
   setPanelMode('context')
 
@@ -137,11 +145,25 @@ if (confidence >= 0.8 && taskUIType !== 'none') {
 }
 ```
 
+**Registry Lookup Pattern:**
+
+```typescript
+// In RightPanel component
+const intentDef = getIntent(currentIntent?.name);
+
+if (panelMode === 'task-ui' && intentDef) {
+  // Render component dynamically from registry
+  return <intentDef.component />;
+}
+```
+
 **Why this pattern works:**
 - **Transparency:** User sees what the system detected before auto-switch
 - **Control:** User can cancel auto-switch or trigger immediately
 - **Progressive disclosure:** Context → Task UI is a natural flow
 - **Feedback loop:** Users learn to trust the system over time
+- **No hardcoding:** Intent-to-component mapping happens via registry
+- **Type-safe:** TypeScript ensures component exists in registry
 
 **Production considerations:**
 - Make countdown duration configurable per user preference
@@ -154,7 +176,7 @@ if (confidence >= 0.8 && taskUIType !== 'none') {
 
 ### 4. Component Architecture
 
-**Pattern:** Container/Presenter with Local State
+**Pattern:** Container/Presenter with Registry-Based Dynamic Rendering
 
 ```
 App (root)
@@ -162,36 +184,81 @@ App (root)
   │   ├─ Message display (presenter)
   │   └─ Input form (controlled component)
   │
-  └─ RightPanel (container)
+  └─ RightPanel (container + registry consumer)
       ├─ Context display (when panelMode = 'context')
       │   ├─ Intent display
       │   └─ Auto-switch countdown
       │
-      └─ Task UIs (when panelMode = 'task-ui')
-          ├─ AddTaskUI (local state for editing)
-          ├─ ListTasksUI (direct store binding)
-          └─ CompleteTaskUI (fuzzy task matching)
+      └─ Dynamic Task UI (when panelMode = 'task-ui')
+          └─ Renders <intentDef.component /> from registry
+              ├─ AddTaskUI (in src/registry/intents/addTask.tsx)
+              ├─ ListTasksUI (in src/registry/intents/listTasks.tsx)
+              ├─ CompleteTaskUI (in src/registry/intents/completeTask.tsx)
+              └─ IssueBonusUI (in src/registry/intents/issueBonus.tsx)
 ```
 
-**Key Pattern: Editable Forms with Pre-filled Data**
+**Key Pattern: Self-Contained Intent Definitions**
 
 ```typescript
+// src/registry/intents/addTask.tsx
+import { useState } from 'react';
+import { useAppStore } from '../../store';
+import type { IntentDefinition } from '../types';
+
 function AddTaskUI() {
-  const { currentIntent, addTask } = useAppStore()
+  const { currentIntent, addTask, clearIntent } = useAppStore();
 
   // Extract entities from intent (initial values)
-  const entities = currentIntent?.entities || {}
+  const entities = currentIntent?.entities || {};
 
   // Local state for editing (user can modify AI extractions)
-  const [title, setTitle] = useState(entities.title || '')
-  const [dueDate, setDueDate] = useState(entities.dueDate || '')
-  const [priority, setPriority] = useState(entities.priority || 'medium')
+  const [title, setTitle] = useState(entities.title || '');
+  const [dueDate, setDueDate] = useState(entities.dueDate || '');
+  const [priority, setPriority] = useState(entities.priority || 'medium');
 
   // Save to store when user clicks "Create"
   const handleCreate = () => {
-    addTask({ title, dueDate, priority, completed: false })
-    clearIntent() // Reset to default state
+    addTask({ title, dueDate, priority, completed: false });
+    clearIntent(); // Reset to default state
+  };
+
+  return (/* UI JSX */);
+}
+
+// Bundle component + schema + description together
+export const addTask: IntentDefinition = {
+  name: 'add_task',
+  description: 'Create a new task with optional due date and priority',
+  component: AddTaskUI,
+  entities: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Task title' },
+      dueDate: { type: 'string', description: 'Due date in natural language' },
+      priority: { type: 'string', enum: ['low', 'medium', 'high'] }
+    },
+    required: ['title']
   }
+};
+```
+
+**Registry Consumption in RightPanel:**
+
+```typescript
+import { getIntent } from '../registry';
+
+export function RightPanel() {
+  const { currentIntent, panelMode } = useAppStore();
+
+  // Look up intent definition from registry
+  const intentDef = currentIntent ? getIntent(currentIntent.name) : null;
+
+  if (panelMode === 'task-ui' && intentDef) {
+    // Dynamically render the registered component
+    return <intentDef.component />;
+  }
+
+  return <ContextPanel />;
 }
 ```
 
@@ -200,6 +267,8 @@ function AddTaskUI() {
 - **Progressive enhancement:** Start with AI extraction, let user refine
 - **Local state for UX:** No store updates until user commits
 - **Clean separation:** UI components don't know about intent detection
+- **Colocation:** Each intent file contains both UI and schema
+- **No hardcoding:** RightPanel doesn't import specific intent components
 
 **Production considerations:**
 - Add validation before saving (required fields, date formats)
@@ -390,54 +459,96 @@ export default async function handler(req, res) {
 
 ## Scaling the Pattern
 
-### Multi-Domain Intents
+### Multi-Domain Intents with Registry
 
-Current prototype: Task management (3 intents)
+Current prototype: Task management (4 intents)
 
-**Production scale:**
+**Production scale with Registry Pattern:**
 
 ```typescript
-// HCM domain example
-const HCM_INTENTS = {
-  hiring: ['post_job', 'review_candidate', 'schedule_interview'],
-  onboarding: ['create_onboarding_plan', 'assign_equipment', 'setup_accounts'],
-  payroll: ['process_payroll', 'update_salary', 'review_timesheet'],
-  benefits: ['enroll_benefits', 'update_coverage', 'check_eligibility'],
-  performance: ['start_review', 'set_goals', 'give_feedback']
-}
+// Each domain registers its intents
+
+// src/registry/intents/hiring/postJob.tsx
+export const postJob: IntentDefinition = {
+  name: 'post_job',
+  description: 'Create a new job posting',
+  component: PostJobUI,
+  entities: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      department: { type: 'string' },
+      salary: { type: 'number' }
+    }
+  }
+};
+
+// src/registry/intents/payroll/processPay.tsx
+export const processPayroll: IntentDefinition = {
+  name: 'process_payroll',
+  description: 'Process payroll for employees',
+  component: ProcessPayrollUI,
+  entities: { /* ... */ }
+};
+
+// Register all intents
+registerIntent(postJob);
+registerIntent(processPayroll);
+registerIntent(enrollBenefits);
+registerIntent(startReview);
+// ... etc.
+
+// Tools are auto-generated from ALL registered intents
+const tools = getIntentTools();
+// → Returns array of 50+ tools if you have 50+ intents
 ```
 
-**Architecture for scale:**
+**Scaling Benefits:**
+
+1. **No central mapping file** - Each intent is self-contained
+2. **Easy to organize** - Group intents by domain in folders
+3. **Lazy loading** - Can dynamically import intent modules
+4. **Type-safe** - TypeScript ensures consistency
+5. **No limit** - Register as many intents as needed
+
+**Recommended File Organization for Scale:**
+
+```
+src/registry/
+├── types.ts
+├── index.ts
+└── intents/
+    ├── tasks/
+    │   ├── addTask.tsx
+    │   ├── listTasks.tsx
+    │   └── completeTask.tsx
+    ├── hiring/
+    │   ├── postJob.tsx
+    │   ├── reviewCandidate.tsx
+    │   └── scheduleInterview.tsx
+    ├── payroll/
+    │   ├── processPayroll.tsx
+    │   ├── updateSalary.tsx
+    │   └── reviewTimesheet.tsx
+    └── benefits/
+        ├── enrollBenefits.tsx
+        ├── updateCoverage.tsx
+        └── checkEligibility.tsx
+```
+
+**Dynamic UI rendering stays the same:**
 
 ```typescript
-// Intent router
-type IntentDomain = 'hiring' | 'onboarding' | 'payroll' | 'benefits' | 'performance'
-
-interface Intent {
-  domain: IntentDomain
-  action: string
-  confidence: number
-  entities: Record<string, unknown>
-}
-
-// Domain-specific UI components
-const DOMAIN_UI_MAP = {
-  hiring: {
-    post_job: PostJobUI,
-    review_candidate: CandidateReviewUI,
-    schedule_interview: InterviewSchedulerUI
-  },
-  // ... other domains
-}
-
-// Dynamic UI rendering
+// RightPanel doesn't need to change as you add more intents
 function RightPanel() {
-  const { currentIntent } = useAppStore()
+  const { currentIntent } = useAppStore();
+  const intentDef = currentIntent ? getIntent(currentIntent.name) : null;
 
-  if (!currentIntent) return <DefaultContextPanel />
+  if (panelMode === 'task-ui' && intentDef) {
+    return <intentDef.component />;
+  }
 
-  const UIComponent = DOMAIN_UI_MAP[currentIntent.domain][currentIntent.action]
-  return <UIComponent intent={currentIntent} />
+  return <ContextPanel />;
 }
 ```
 
@@ -556,21 +667,38 @@ function RightPanel() {
 src/
 ├── components/          # React components
 │   ├── ChatPanel.tsx    # Left panel (conversation)
-│   └── RightPanel.tsx   # Right panel (context + task UIs)
+│   └── RightPanel.tsx   # Right panel (context + dynamic task UIs)
+│
+├── registry/            # Intent registry system
+│   ├── types.ts         # IntentDefinition, AnthropicTool, EntitySchema
+│   ├── index.ts         # Registry functions (registerIntent, getIntent, getIntentTools)
+│   └── intents/         # Self-contained intent definitions
+│       ├── addTask.tsx       # Add task intent + UI
+│       ├── listTasks.tsx     # List tasks intent + UI
+│       ├── completeTask.tsx  # Complete task intent + UI
+│       └── issueBonus.tsx    # Issue bonus intent + UI
 │
 ├── services/            # External integrations
-│   └── claude.ts        # Intent detection + response generation
+│   └── claude.ts        # Intent detection + response generation (uses registry)
 │
 ├── store/               # State management
 │   └── index.ts         # Zustand store with persistence
 │
 ├── types/               # TypeScript interfaces
-│   └── index.ts         # Message, Intent, Task types
+│   └── index.ts         # Message, Intent, Task, PanelMode types
 │
 ├── App.tsx              # Root component (split layout)
 ├── App.css              # Styling
 └── main.tsx             # Entry point
 ```
+
+**Key Files:**
+
+- **`src/registry/types.ts`**: Type definitions for the registry system
+- **`src/registry/index.ts`**: Core registry with `registerIntent()`, `getIntent()`, `getIntentTools()`
+- **`src/registry/intents/*.tsx`**: Each file exports an `IntentDefinition` with component + schema
+- **`src/components/RightPanel.tsx`**: Consumes registry via `getIntent()` to render components dynamically
+- **`src/services/claude.ts`**: Uses `getIntentTools()` to generate Anthropic tools from registry
 
 ---
 

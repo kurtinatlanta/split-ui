@@ -26,29 +26,36 @@ This guide explains **how to implement** the patterns described in VISION.md. It
 src/
 ├── components/
 │   ├── ChatPanel.tsx           # Left panel - conversation
-│   └── RightPanel.tsx          # Right panel - dynamic UI
+│   └── RightPanel.tsx          # Right panel - dynamic UI (consumes registry)
 │
-├── tasks/                       # Task UI components
-│   ├── compensation/
-│   │   ├── IssueBonusTask.tsx
-│   │   └── GiveRaiseTask.tsx
-│   └── navigation/
-│       └── NavigateToTask.tsx
-│
-├── intents/                     # Intent definitions
-│   ├── compensation.ts
-│   ├── navigation.ts
-│   └── registry.ts             # Central intent → component mapping
+├── registry/                    # Intent registry system
+│   ├── types.ts                 # IntentDefinition, AnthropicTool, EntitySchema
+│   ├── index.ts                 # Registry functions (registerIntent, getIntent, etc.)
+│   └── intents/                 # Self-contained intent definitions
+│       ├── addTask.tsx          # Task intent: add task + UI component
+│       ├── listTasks.tsx        # Task intent: list tasks + UI component
+│       ├── completeTask.tsx     # Task intent: complete task + UI component
+│       └── issueBonus.tsx       # Compensation intent: issue bonus + UI component
 │
 ├── services/
-│   └── claude.ts               # Claude API integration
+│   └── claude.ts               # Claude API integration (uses getIntentTools())
 │
 ├── store/
 │   └── index.ts                # Zustand store
 │
-└── types/
-    └── index.ts                # TypeScript interfaces
+├── types/
+│   └── index.ts                # TypeScript interfaces (Message, Intent, Task, etc.)
+│
+├── App.tsx                     # Root component
+└── main.tsx                    # Entry point
 ```
+
+**Key Differences from Traditional Architecture:**
+
+- **No separate `tasks/` folder**: UI components are colocated with intent definitions in `registry/intents/`
+- **No hardcoded mappings**: `registry/index.ts` provides dynamic lookup functions
+- **Self-contained intents**: Each intent file exports both the component AND the schema
+- **Type-safe**: Full TypeScript support with proper types for tools and schemas
 
 ### Data Flow
 
@@ -58,19 +65,22 @@ User Input (Chat)
 ChatPanel → handleSubmit()
     ↓
 services/claude.ts
-    ├─ detectIntent() ────────→ Tool use API call
+    ├─ getIntentTools() ──────→ Generate tools from registry
+    ├─ detectIntent() ────────→ Tool use API call (Claude picks intent tool)
     └─ generateResponse() ────→ Regular API call
     ↓
 State Update (Zustand)
-    ├─ setIntent()
-    ├─ setTaskUIType()
+    ├─ setIntent()        # Stores { name, confidence, entities }
+    ├─ setPanelMode()     # Sets 'context' first
     └─ addMessage()
     ↓
 RightPanel Re-renders
     ↓
-Selects Task Component from Registry
+getIntent(name) → Looks up IntentDefinition from registry
     ↓
-Task Component Renders with Entities
+Renders <intentDef.component /> with entities from store
+    ↓
+Auto-switch to task-ui mode after countdown (if high confidence)
 ```
 
 ---
@@ -97,59 +107,57 @@ const model = 'claude-sonnet-4-5-20250929';
 
 Tool use is how you get **reliable, typed data** from the LLM instead of parsing free text.
 
-**Define a tool schema:**
+**Registry-based tool generation:**
 
 ```typescript
-const INTENT_DETECTION_TOOLS = [
-  {
-    name: 'detect_intent',
-    description: 'Detect user intent and extract entities',
-    input_schema: {
-      type: 'object',
-      properties: {
-        intent: {
-          type: 'string',
-          enum: ['issue_bonus', 'give_raise', 'navigate_to', 'none'],
-          description: 'The detected user intent'
-        },
-        confidence: {
-          type: 'number',
-          description: 'Confidence score between 0 and 1',
-          minimum: 0,
-          maximum: 1
-        },
-        entities: {
-          type: 'object',
-          properties: {
-            employeeName: {
-              type: 'string',
-              description: 'Full name of the employee'
-            },
-            amount: {
-              type: 'number',
-              description: 'Dollar amount (for compensation)'
-            }
-            // Add more entity types as needed
-          }
-        }
-      },
-      required: ['intent', 'confidence', 'entities']
-    }
-  }
-];
+// Tools are generated from registered intents
+import { getIntentTools } from '../registry';
+
+const tools = getIntentTools();
+// Returns one tool per registered intent, e.g.:
+// [
+//   {
+//     name: 'add_task',
+//     description: 'Create a new task with optional due date and priority',
+//     input_schema: {
+//       type: 'object',
+//       properties: {
+//         title: { type: 'string', description: 'Task title' },
+//         dueDate: { type: 'string', description: 'Due date in natural language' },
+//         priority: { type: 'string', enum: ['low', 'medium', 'high'] }
+//       },
+//       required: ['title']
+//     }
+//   },
+//   {
+//     name: 'issue_bonus',
+//     description: 'Issue a monetary bonus to an employee',
+//     input_schema: {
+//       type: 'object',
+//       properties: {
+//         employeeName: { type: 'string', description: 'Employee name' },
+//         amount: { type: 'number', description: 'Bonus amount in dollars' }
+//       },
+//       required: ['employeeName', 'amount']
+//     }
+//   }
+//   // ... more tools
+// ]
 ```
 
-**Call the API with tools:**
+**Call the API with registry-generated tools:**
 
 ```typescript
+const tools = getIntentTools(); // Dynamic tool generation
+
 const response = await client.messages.create({
   model,
   max_tokens: 1024,
-  tools: INTENT_DETECTION_TOOLS,
+  tools: tools as Anthropic.Tool[],
   messages: [
     {
       role: 'user',
-      content: 'Analyze this message and detect intent: "Give John a $5000 bonus"'
+      content: 'Analyze this message: "Give John a $5000 bonus"'
     }
   ]
 });
@@ -158,10 +166,16 @@ const response = await client.messages.create({
 const toolUse = response.content.find(block => block.type === 'tool_use');
 
 if (toolUse && toolUse.type === 'tool_use') {
-  const { intent, confidence, entities } = toolUse.input;
-  // → intent: "issue_bonus"
-  // → confidence: 0.95
-  // → entities: { employeeName: "John", amount: 5000 }
+  const { name, input } = toolUse;
+  // → name: "issue_bonus" (the tool name IS the intent name)
+  // → input: { employeeName: "John", amount: 5000 }
+
+  // Return as Intent
+  return {
+    name: name,
+    confidence: 1.0, // Implicit high confidence if tool was called
+    entities: input
+  };
 }
 ```
 
@@ -611,32 +625,47 @@ export function IssueBonusTask(props: IssueBonusTaskProps) {
 ```typescript
 // components/RightPanel.tsx
 
-import { INTENT_REGISTRY } from '../intents/registry';
+import { getIntent } from '../registry';
+import { useAppStore } from '../store';
 
 export function RightPanel() {
-  const { currentIntent, clearIntent, addMessage } = useAppStore();
+  const { currentIntent, panelMode, clearIntent } = useAppStore();
 
-  if (!currentIntent) {
-    return <ContextPanel />;
+  // Look up intent definition from registry
+  const intentDef = currentIntent ? getIntent(currentIntent.name) : null;
+
+  // Show context panel with intent info
+  if (panelMode === 'context') {
+    return (
+      <div className="context-panel">
+        {currentIntent && intentDef && (
+          <div>
+            <h3>Detected Intent: {currentIntent.name}</h3>
+            <p>Confidence: {(currentIntent.confidence * 100).toFixed(0)}%</p>
+            {/* Auto-switch countdown UI here */}
+          </div>
+        )}
+      </div>
+    );
   }
 
-  // Look up component from registry
-  const intentConfig = INTENT_REGISTRY[currentIntent.name];
-  const TaskComponent = intentConfig.component;
+  // Show task UI
+  if (panelMode === 'task-ui' && intentDef) {
+    // Dynamically render component from registry
+    return <intentDef.component />;
+  }
 
-  // Render with extracted entities as props
-  return (
-    <TaskComponent
-      {...currentIntent.entities}
-      onComplete={(result) => {
-        addMessage('assistant', `Completed: ${result.message}`);
-        clearIntent();
-      }}
-      onCancel={clearIntent}
-    />
-  );
+  // Default state
+  return <ContextPanel />;
 }
 ```
+
+**Key Benefits:**
+
+- No hardcoded intent-to-component mapping
+- RightPanel doesn't import specific task components
+- Adding new intents doesn't require changing RightPanel
+- Type-safe lookups via registry
 
 ---
 
@@ -655,7 +684,6 @@ interface AppState {
   isProcessing: boolean;
   currentIntent: Intent | null;
   panelMode: 'context' | 'task-ui';
-  taskUIType: string;
 
   // Persistent state (survives refresh)
   messages: Message[];
@@ -665,6 +693,7 @@ interface AppState {
   addMessage: (role: string, content: string) => void;
   setIntent: (intent: Intent | null) => void;
   clearIntent: () => void;
+  setPanelMode: (mode: 'context' | 'task-ui') => void;
   // ...
 }
 
@@ -675,7 +704,6 @@ export const useAppStore = create<AppState>()(
       isProcessing: false,
       currentIntent: null,
       panelMode: 'context',
-      taskUIType: 'none',
       messages: [],
       tasks: [],
 
@@ -696,11 +724,12 @@ export const useAppStore = create<AppState>()(
           panelMode: 'context'  // Show context first
         }),
 
+      setPanelMode: (mode) => set({ panelMode: mode }),
+
       clearIntent: () =>
         set({
           currentIntent: null,
-          panelMode: 'context',
-          taskUIType: 'none'
+          panelMode: 'context'
         })
     }),
     {
@@ -1037,12 +1066,232 @@ Test variations:
 
 ---
 
+## How to Add a New Intent (Step-by-Step)
+
+This section walks through creating a new intent from scratch using the registry pattern.
+
+### Example: Adding a "Schedule Meeting" Intent
+
+**Step 1: Create the intent file**
+
+Create `src/registry/intents/scheduleMeeting.tsx`:
+
+```typescript
+import { useState } from 'react';
+import { useAppStore } from '../../store';
+import type { IntentDefinition } from '../types';
+
+// UI Component
+function ScheduleMeetingUI() {
+  const { currentIntent, clearIntent, addMessage } = useAppStore();
+
+  // Extract entities from AI detection
+  const entities = currentIntent?.entities || {};
+
+  // Local state for editing
+  const [attendees, setAttendees] = useState<string>(
+    entities.attendees as string || ''
+  );
+  const [date, setDate] = useState<string>(
+    entities.date as string || ''
+  );
+  const [duration, setDuration] = useState<number>(
+    entities.duration as number || 30
+  );
+  const [topic, setTopic] = useState<string>(
+    entities.topic as string || ''
+  );
+
+  const handleSchedule = () => {
+    // Your business logic here (call API, update calendar, etc.)
+    console.log('Scheduling meeting:', {
+      attendees,
+      date,
+      duration,
+      topic
+    });
+
+    addMessage(
+      'assistant',
+      `Meeting scheduled with ${attendees} on ${date} for ${duration} minutes.`
+    );
+
+    clearIntent();
+  };
+
+  return (
+    <div className="schedule-meeting-ui">
+      <h3>Schedule Meeting</h3>
+
+      <div className="form-field">
+        <label>Attendees</label>
+        <input
+          type="text"
+          value={attendees}
+          onChange={(e) => setAttendees(e.target.value)}
+          placeholder="e.g., John Doe, Jane Smith"
+        />
+      </div>
+
+      <div className="form-field">
+        <label>Date & Time</label>
+        <input
+          type="text"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          placeholder="e.g., Tomorrow at 2pm, Friday at 10am"
+        />
+      </div>
+
+      <div className="form-field">
+        <label>Duration (minutes)</label>
+        <input
+          type="number"
+          value={duration}
+          onChange={(e) => setDuration(parseInt(e.target.value))}
+        />
+      </div>
+
+      <div className="form-field">
+        <label>Topic</label>
+        <input
+          type="text"
+          value={topic}
+          onChange={(e) => setTopic(e.target.value)}
+          placeholder="e.g., Q4 Planning"
+        />
+      </div>
+
+      <button onClick={handleSchedule}>Schedule Meeting</button>
+      <button onClick={clearIntent} className="secondary">
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+// Intent Definition (bundle component + schema)
+export const scheduleMeeting: IntentDefinition = {
+  name: 'schedule_meeting',
+  description: 'Schedule a meeting with attendees at a specific date and time',
+  component: ScheduleMeetingUI,
+  entities: {
+    type: 'object',
+    properties: {
+      attendees: {
+        type: 'string',
+        description: 'Names of meeting attendees (comma-separated)'
+      },
+      date: {
+        type: 'string',
+        description: 'Date and time of the meeting in natural language'
+      },
+      duration: {
+        type: 'number',
+        description: 'Meeting duration in minutes'
+      },
+      topic: {
+        type: 'string',
+        description: 'Meeting topic or agenda'
+      }
+    },
+    required: ['attendees', 'date']
+  }
+};
+```
+
+**Step 2: Register the intent**
+
+In `src/registry/index.ts`, add:
+
+```typescript
+import { scheduleMeeting } from './intents/scheduleMeeting';
+
+// ... existing imports ...
+
+// Register all intents
+registerIntent(addTask);
+registerIntent(listTasks);
+registerIntent(completeTask);
+registerIntent(issueBonus);
+registerIntent(scheduleMeeting);  // ← Add this line
+```
+
+**Step 3: That's it!**
+
+No other changes needed:
+- ✅ Tool is auto-generated from the schema
+- ✅ Claude will detect "schedule meeting" intents
+- ✅ RightPanel will render the component dynamically
+- ✅ TypeScript types are enforced
+
+**Step 4: Test it**
+
+Try these messages:
+- "Schedule a meeting with John tomorrow at 2pm"
+- "I need to meet with the team on Friday at 10am for an hour"
+- "Set up a 30-minute call with Jane next week to discuss Q4 planning"
+
+### Quick Reference: Intent Definition Structure
+
+```typescript
+export const yourIntent: IntentDefinition = {
+  // Tool name (use snake_case)
+  name: 'your_intent_name',
+
+  // Description for Claude to understand when to use this tool
+  description: 'Clear description of what this intent does',
+
+  // React component to render
+  component: YourIntentUI,
+
+  // JSON Schema for entity extraction
+  entities: {
+    type: 'object',
+    properties: {
+      fieldName: {
+        type: 'string' | 'number' | 'boolean',
+        description: 'Help Claude understand what to extract',
+        enum: ['option1', 'option2']  // Optional: for constrained values
+      }
+    },
+    required: ['fieldName']  // Optional: which fields are required
+  }
+};
+```
+
+### Best Practices
+
+1. **Good Intent Names**
+   - ✅ Use snake_case: `schedule_meeting`, `issue_bonus`
+   - ✅ Be specific: `create_expense_report` not `create_thing`
+   - ❌ Avoid generic: `do_action`, `handle_request`
+
+2. **Good Descriptions**
+   - ✅ Be clear: "Schedule a meeting with specific attendees at a date and time"
+   - ✅ Include context: "Issue a one-time monetary bonus to an employee"
+   - ❌ Avoid vague: "Handle meetings"
+
+3. **Good Entity Schemas**
+   - ✅ Add descriptions to help Claude extract correctly
+   - ✅ Use `enum` for constrained values
+   - ✅ Mark truly required fields in `required` array
+   - ❌ Don't make everything required if it's optional
+
+4. **Component Design**
+   - Extract entities into local state (let users edit)
+   - Validate before submission
+   - Call `clearIntent()` when done
+   - Show clear success/error feedback
+
+---
+
 ## Next Steps
 
 1. **Read VISION.md** for the conceptual framework
 2. **Study this implementation guide** for practical patterns
 3. **Examine the current codebase** (src/services/claude.ts, etc.)
-4. **Build one new intent end-to-end** to solidify understanding
+4. **Build one new intent end-to-end** using the guide above
 5. **Iterate and refine** based on what you learn
 
 As you build, update this document with new patterns, gotchas, and solutions you discover.
@@ -1050,3 +1299,4 @@ As you build, update this document with new patterns, gotchas, and solutions you
 ---
 
 *Document created: 2024-11-25*
+*Updated: 2024-11-28 - Added registry pattern*
