@@ -1,9 +1,13 @@
 import { useAppStore } from '../store';
 import { useState, useEffect } from 'react';
+import { getIntent } from '../registry';
 
 export function RightPanel() {
-  const { panelMode, currentIntent, taskUIType, tasks, messages, setPanelMode } = useAppStore();
+  const { panelMode, currentIntent, setPanelMode } = useAppStore();
   const [autoSwitchCountdown, setAutoSwitchCountdown] = useState<number | null>(null);
+
+  // Get intent definition if available
+  const intentDef = currentIntent ? getIntent(currentIntent.name) : null;
 
   // Auto-switch to task UI after 3 seconds if high confidence intent is detected
   useEffect(() => {
@@ -11,7 +15,7 @@ export function RightPanel() {
       panelMode === 'context' &&
       currentIntent &&
       currentIntent.confidence >= 0.8 &&
-      taskUIType !== 'none'
+      intentDef
     ) {
       // Start countdown from 3 seconds
       setAutoSwitchCountdown(3);
@@ -31,7 +35,7 @@ export function RightPanel() {
     } else {
       setAutoSwitchCountdown(null);
     }
-  }, [panelMode, currentIntent, taskUIType, setPanelMode]);
+  }, [panelMode, currentIntent, intentDef, setPanelMode]);
 
   const cancelAutoSwitch = () => {
     setAutoSwitchCountdown(null);
@@ -57,7 +61,7 @@ export function RightPanel() {
                   <pre>{JSON.stringify(currentIntent.entities, null, 2)}</pre>
                 </div>
               )}
-              {taskUIType !== 'none' && (
+              {intentDef && (
                 <div style={{ marginTop: '1rem' }}>
                   {autoSwitchCountdown !== null ? (
                     <div className="auto-switch-notice">
@@ -91,8 +95,7 @@ export function RightPanel() {
 
           <div className="conversation-summary">
             <h3>Conversation Summary</h3>
-            <p>{messages.length} messages exchanged</p>
-            <p>{tasks.length} tasks in system</p>
+            <ConversationStats />
           </div>
         </div>
       </div>
@@ -106,179 +109,23 @@ export function RightPanel() {
         <h2>Task UI</h2>
       </div>
       <div className="task-ui-content">
-        {taskUIType === 'add-task' && <AddTaskUI />}
-        {taskUIType === 'list-tasks' && <ListTasksUI />}
-        {taskUIType === 'complete-task' && <CompleteTaskUI />}
-        {taskUIType === 'none' && <div>No task UI selected</div>}
+        {intentDef ? (
+          <intentDef.component />
+        ) : (
+          <div>No task UI available for this intent</div>
+        )}
       </div>
     </div>
   );
 }
 
-function AddTaskUI() {
-  const { currentIntent, addTask, clearIntent, addMessage } = useAppStore();
-
-  const entities = currentIntent?.entities || {};
-  const [title, setTitle] = useState((entities.title as string) || '');
-  const [dueDate, setDueDate] = useState((entities.dueDate as string) || '');
-  const [priority, setPriority] = useState<'low' | 'medium' | 'high'>(
-    (entities.priority as 'low' | 'medium' | 'high') || 'medium'
-  );
-
-  const handleCreate = () => {
-    addTask({
-      title: title || 'Untitled Task',
-      dueDate: dueDate || undefined,
-      priority,
-      completed: false,
-    });
-    addMessage('assistant', `Task "${title}" has been created.`);
-    clearIntent();
-  };
-
+function ConversationStats() {
+  const { messages, tasks } = useAppStore();
   return (
-    <div className="add-task-ui">
-      <h3>Create Task</h3>
-      <div className="form-field">
-        <label>Title</label>
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Enter task title"
-        />
-      </div>
-      <div className="form-field">
-        <label>Due Date</label>
-        <input
-          type="text"
-          value={dueDate}
-          onChange={(e) => setDueDate(e.target.value)}
-          placeholder="e.g., Friday, next week, 2025-01-15"
-        />
-      </div>
-      <div className="form-field">
-        <label>Priority</label>
-        <select value={priority} onChange={(e) => setPriority(e.target.value as 'low' | 'medium' | 'high')}>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
-      </div>
-      <button onClick={handleCreate}>Create Task</button>
-      <button onClick={clearIntent} className="secondary">
-        Cancel
-      </button>
-    </div>
+    <>
+      <p>{messages.length} messages exchanged</p>
+      <p>{tasks.length} tasks in system</p>
+    </>
   );
 }
 
-function ListTasksUI() {
-  const { tasks, toggleTask, clearIntent } = useAppStore();
-
-  return (
-    <div className="list-tasks-ui">
-      <h3>Your Tasks</h3>
-      {tasks.length === 0 ? (
-        <p>No tasks yet.</p>
-      ) : (
-        <ul className="task-list">
-          {tasks.map((task) => (
-            <li key={task.id} className={task.completed ? 'completed' : ''}>
-              <input
-                type="checkbox"
-                checked={task.completed}
-                onChange={() => toggleTask(task.id)}
-              />
-              <span className="task-title">{task.title}</span>
-              {task.dueDate && (
-                <span className="task-due">Due: {task.dueDate}</span>
-              )}
-              <span className={`task-priority ${task.priority}`}>
-                {task.priority}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <button onClick={clearIntent}>Close</button>
-    </div>
-  );
-}
-
-function CompleteTaskUI() {
-  const { currentIntent, tasks, toggleTask, clearIntent, addMessage } = useAppStore();
-
-  const entities = currentIntent?.entities || {};
-  const taskIdentifier = (entities.taskIdentifier as string) || '';
-
-  // Find matching tasks (by partial title match)
-  const matchingTasks = tasks.filter((task) =>
-    task.title.toLowerCase().includes(taskIdentifier.toLowerCase())
-  );
-
-  const handleComplete = (taskId: string, taskTitle: string) => {
-    toggleTask(taskId);
-    addMessage('assistant', `Task "${taskTitle}" has been marked as complete.`);
-    clearIntent();
-  };
-
-  return (
-    <div className="complete-task-ui">
-      <h3>Complete Task</h3>
-      {taskIdentifier && (
-        <p className="search-query">Looking for: "{taskIdentifier}"</p>
-      )}
-      {matchingTasks.length === 0 ? (
-        <div>
-          <p>No matching tasks found.</p>
-          <p>Available tasks:</p>
-          <ul className="task-list">
-            {tasks
-              .filter((task) => !task.completed)
-              .map((task) => (
-                <li key={task.id}>
-                  <button
-                    onClick={() => handleComplete(task.id, task.title)}
-                    className="task-item-button"
-                  >
-                    <span className="task-title">{task.title}</span>
-                    {task.dueDate && (
-                      <span className="task-due">Due: {task.dueDate}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-          </ul>
-        </div>
-      ) : (
-        <div>
-          <p>Select task to complete:</p>
-          <ul className="task-list">
-            {matchingTasks
-              .filter((task) => !task.completed)
-              .map((task) => (
-                <li key={task.id}>
-                  <button
-                    onClick={() => handleComplete(task.id, task.title)}
-                    className="task-item-button"
-                  >
-                    <span className="task-title">{task.title}</span>
-                    {task.dueDate && (
-                      <span className="task-due">Due: {task.dueDate}</span>
-                    )}
-                    <span className={`task-priority ${task.priority}`}>
-                      {task.priority}
-                    </span>
-                  </button>
-                </li>
-              ))}
-          </ul>
-        </div>
-      )}
-      <button onClick={clearIntent} className="secondary">
-        Cancel
-      </button>
-    </div>
-  );
-}

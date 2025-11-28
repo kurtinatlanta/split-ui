@@ -200,15 +200,17 @@
   padding: 1rem;
   background: #f5f5f5;
   border-radius: 8px;
+  color: #333;
 }
 
 .conversation-summary h3 {
   margin: 0 0 0.5rem 0;
+  color: #333;
 }
 
 .conversation-summary p {
   margin: 0.25rem 0;
-  color: #666;
+  color: #333;
 }
 
 /* Task UI */

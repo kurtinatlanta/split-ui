@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Message, Intent, Task, PanelMode, TaskUIType } from '../types';
+import type { Message, Intent, Task, PanelMode } from '../types';
 
 interface AppState {
   // Chat state
@@ -12,7 +12,6 @@ interface AppState {
 
   // Right panel
   panelMode: PanelMode;
-  taskUIType: TaskUIType;
 
   // Domain data
   tasks: Task[];
@@ -22,7 +21,6 @@ interface AppState {
   setProcessing: (processing: boolean) => void;
   setIntent: (intent: Intent | null) => void;
   setPanelMode: (mode: PanelMode) => void;
-  setTaskUIType: (type: TaskUIType) => void;
   addTask: (task: Omit<Task, 'id' | 'createdAt'>) => void;
   toggleTask: (id: string) => void;
   clearIntent: () => void;
@@ -36,7 +34,6 @@ export const useAppStore = create<AppState>()(
       isProcessing: false,
       currentIntent: null,
       panelMode: 'context',
-      taskUIType: 'none',
       tasks: [],
 
       // Actions
@@ -58,8 +55,6 @@ export const useAppStore = create<AppState>()(
       setIntent: (intent) => set({ currentIntent: intent }),
 
       setPanelMode: (mode) => set({ panelMode: mode }),
-
-      setTaskUIType: (type) => set({ taskUIType: type }),
 
       addTask: (taskData) =>
         set((state) => ({
@@ -84,7 +79,6 @@ export const useAppStore = create<AppState>()(
         set({
           currentIntent: null,
           panelMode: 'context',
-          taskUIType: 'none',
         }),
     }),
     {

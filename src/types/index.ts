@@ -21,4 +21,3 @@ export interface Task {
 }
 
 export type PanelMode = 'context' | 'task-ui';
-export type TaskUIType = 'add-task' | 'list-tasks' | 'complete-task' | 'none';

@@ -10,8 +10,7 @@ export function ChatPanel() {
     addMessage,
     setProcessing,
     setIntent,
-    setPanelMode,
-    setTaskUIType
+    setPanelMode
   } = useAppStore();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -40,15 +39,6 @@ export function ChatPanel() {
       if (intent) {
         setIntent(intent);
         setPanelMode('context'); // Show context first
-
-        // Map intent to UI type
-        if (intent.name === 'add_task') {
-          setTaskUIType('add-task');
-        } else if (intent.name === 'list_tasks') {
-          setTaskUIType('list-tasks');
-        } else if (intent.name === 'complete_task') {
-          setTaskUIType('complete-task');
-        }
       }
     } catch (error) {
       console.error('Error processing message:', error);
