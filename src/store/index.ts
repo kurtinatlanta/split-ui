@@ -24,6 +24,7 @@ interface AppState {
   addTask: (task: Omit<Task, 'id' | 'createdAt'>) => void;
   toggleTask: (id: string) => void;
   clearIntent: () => void;
+  clearMessages: () => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -77,6 +78,13 @@ export const useAppStore = create<AppState>()(
 
       clearIntent: () =>
         set({
+          currentIntent: null,
+          panelMode: 'context',
+        }),
+
+      clearMessages: () =>
+        set({
+          messages: [],
           currentIntent: null,
           panelMode: 'context',
         }),

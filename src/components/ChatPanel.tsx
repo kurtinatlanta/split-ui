@@ -6,11 +6,13 @@ export function ChatPanel() {
   const [input, setInput] = useState('');
   const {
     messages,
+    tasks,
     isProcessing,
     addMessage,
     setProcessing,
     setIntent,
-    setPanelMode
+    setPanelMode,
+    clearMessages
   } = useAppStore();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -26,13 +28,18 @@ export function ChatPanel() {
       // Build conversation history for context
       const history = messages.map(m => m.content);
 
+      // Add task context for AI awareness
+      const taskContext = tasks.length > 0
+        ? `\n\nCurrent tasks:\n${tasks.map(t => `- ${t.title}${t.completed ? ' (completed)' : ''}`).join('\n')}`
+        : '\n\nNo tasks in the system yet.';
+
       // Get the configured LLM provider
       const provider = getLLMProvider();
 
       // Detect intent and generate response in parallel
       const [intent, response] = await Promise.all([
         provider.detectIntent(userMessage, history),
-        provider.generateResponse(userMessage, history),
+        provider.generateResponse(userMessage, [...history, taskContext]),
       ]);
 
       // Add assistant response
@@ -70,6 +77,16 @@ export function ChatPanel() {
     <div className="chat-panel">
       <div className="chat-header">
         <h2>Chat</h2>
+        {messages.length > 0 && (
+          <button
+            onClick={clearMessages}
+            className="clear-chat-button"
+            disabled={isProcessing}
+            title="Clear conversation history"
+          >
+            Clear Chat
+          </button>
+        )}
       </div>
 
       <div className="messages">

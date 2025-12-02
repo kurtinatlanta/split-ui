@@ -39,11 +39,17 @@ VITE_LLM_PROVIDER=http
 VITE_ANTHROPIC_API_KEY=sk-ant-your-key-here
 VITE_ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
 
-# Option B: Use AWS Bedrock (comment out Anthropic, uncomment these)
+# Option B: Use AWS Bedrock with IAM Credentials
 # VITE_AWS_ACCESS_KEY_ID=AKIA...
 # VITE_AWS_SECRET_ACCESS_KEY=your_secret
 # VITE_AWS_REGION=us-east-1
 # VITE_BEDROCK_MODEL=anthropic.claude-sonnet-4-5-20250929-v1:0
+
+# Option C: Use AWS Bedrock with API Key (Bearer Token)
+# Set AWS_BEARER_TOKEN_BEDROCK in your shell environment (~/.zshrc or ~/.bashrc)
+# Then just configure region and model here:
+# VITE_AWS_REGION=us-east-1
+# VITE_BEDROCK_MODEL=global.anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
 ### 2. Run Both Servers
@@ -149,14 +155,29 @@ VITE_LLM_PROVIDER=anthropic  # Backend will use this
 VITE_ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-### To Use Bedrock:
+### To Use Bedrock (IAM Credentials):
 ```bash
 # In .env.local
-VITE_LLM_PROVIDER=bedrock  # Backend will use this
 VITE_AWS_ACCESS_KEY_ID=AKIA...
 VITE_AWS_SECRET_ACCESS_KEY=...
 VITE_AWS_REGION=us-east-1
+VITE_BEDROCK_MODEL=anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
+
+### To Use Bedrock (API Key / Bearer Token):
+```bash
+# In your shell (~/.zshrc or ~/.bashrc)
+export AWS_BEARER_TOKEN_BEDROCK="your_bedrock_api_key_here"
+
+# In .env.local (no credentials needed, backend auto-detects bearer token)
+VITE_AWS_REGION=us-east-1
+VITE_BEDROCK_MODEL=global.anthropic.claude-sonnet-4-5-20250929-v1:0
+```
+
+**Note:** Bearer token auth is auto-detected. The backend checks for credentials in this order:
+1. `AWS_BEARER_TOKEN_BEDROCK` (shell environment) → Uses bearer token auth
+2. `VITE_AWS_ACCESS_KEY_ID` + `VITE_AWS_SECRET_ACCESS_KEY` → Uses IAM credentials
+3. `VITE_ANTHROPIC_API_KEY` → Uses Anthropic Direct API
 
 Restart the backend server after changing providers:
 ```bash

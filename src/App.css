@@ -40,11 +40,36 @@
 .chat-header {
   padding: 1rem;
   border-bottom: 1px solid #eee;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
 }
 
 .chat-header h2 {
   margin: 0;
   font-size: 1.2rem;
+}
+
+.clear-chat-button {
+  padding: 0.5rem 1rem;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  color: #333;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+}
+
+.clear-chat-button:hover:not(:disabled) {
+  background: #e5e5e5;
+  border-color: #ccc;
+}
+
+.clear-chat-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .messages {
