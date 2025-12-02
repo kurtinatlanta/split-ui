@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAppStore } from '../store';
-import { detectIntent, generateResponse } from '../services/claude';
+import { getLLMProvider } from '../services/llm-factory';
 
 export function ChatPanel() {
   const [input, setInput] = useState('');
@@ -26,10 +26,13 @@ export function ChatPanel() {
       // Build conversation history for context
       const history = messages.map(m => m.content);
 
+      // Get the configured LLM provider
+      const provider = getLLMProvider();
+
       // Detect intent and generate response in parallel
       const [intent, response] = await Promise.all([
-        detectIntent(userMessage, history),
-        generateResponse(userMessage, history),
+        provider.detectIntent(userMessage, history),
+        provider.generateResponse(userMessage, history),
       ]);
 
       // Add assistant response

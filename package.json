@@ -5,17 +5,25 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "dev:all": "npm run server & npm run dev",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "list-models": "node scripts/list-bedrock-models.js"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.26.0",
     "@anthropic-ai/sdk": "^0.70.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@aws-sdk/client-bedrock": "^3.943.0",
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.2",

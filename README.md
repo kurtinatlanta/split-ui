@@ -28,22 +28,57 @@ A proof-of-concept demonstrating AI-powered intent detection with dynamic UI swi
 npm install
 ```
 
-### 2. Configure API Key
+### 2. Configure LLM Provider
 
-Your API key is already configured in `.env.local`. If you need to update it:
+The app uses a **backend proxy server** for secure API access. The backend supports:
+- **Anthropic Direct API**
+- **AWS Bedrock**
+
+Copy `.env.example` to `.env.local` and configure:
 
 ```bash
 # .env.local
+
+# Frontend uses HTTP provider (calls backend)
+VITE_LLM_PROVIDER=http
+
+# Backend provider configuration
+# Choose ONE of these:
+
+# Option A: Anthropic Direct API
 VITE_ANTHROPIC_API_KEY=your_api_key_here
+VITE_ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+
+# Option B: AWS Bedrock (comment out Anthropic, uncomment these)
+# VITE_AWS_ACCESS_KEY_ID=AKIA...
+# VITE_AWS_SECRET_ACCESS_KEY=your_secret
+# VITE_AWS_REGION=us-east-1
+# VITE_BEDROCK_MODEL=anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
-### 3. Run Development Server
+### 3. Run Both Servers
 
+**Start both frontend and backend:**
 ```bash
+npm run dev:all
+```
+
+This runs:
+- Backend on `http://localhost:3001`
+- Frontend on `http://localhost:5173`
+
+**Or run separately** (for debugging):
+```bash
+# Terminal 1 - Backend
+npm run server
+
+# Terminal 2 - Frontend
 npm run dev
 ```
 
-Open http://localhost:5173 in your browser.
+Open `http://localhost:5173` in your browser.
+
+**See [BACKEND_SETUP.md](./BACKEND_SETUP.md) for detailed backend configuration and troubleshooting.**
 
 ## How It Works
 
@@ -96,27 +131,41 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed architecture documentation
 ## Project Structure
 
 ```
+server/
+└── index.js                    # Backend proxy server (Express)
+
 src/
 ├── components/
-│   ├── ChatPanel.tsx       # Left panel - conversation
-│   └── RightPanel.tsx      # Right panel - context + task UIs
+│   ├── ChatPanel.tsx           # Left panel - conversation
+│   └── RightPanel.tsx          # Right panel - context + task UIs
 ├── services/
-│   └── claude.ts           # Intent detection + Claude API
+│   ├── llm-provider.ts         # LLM provider interface
+│   ├── http-provider.ts        # HTTP provider (calls backend)
+│   ├── anthropic-provider.ts   # Anthropic SDK (backend only)
+│   ├── bedrock-provider.ts     # Bedrock SDK (backend only)
+│   └── llm-factory.ts          # Provider factory
+├── config/
+│   └── llm-config.ts           # Provider configuration
 ├── store/
-│   └── index.ts            # Zustand state management
+│   └── index.ts                # Zustand state management
 ├── types/
-│   └── index.ts            # TypeScript interfaces
-├── App.tsx                 # Root component
-└── main.tsx                # Entry point
+│   └── index.ts                # TypeScript interfaces
+├── App.tsx                     # Root component
+└── main.tsx                    # Entry point
 ```
 
 ## Tech Stack
 
+**Frontend:**
 - **React** 19 with TypeScript
 - **Vite** for build tooling
 - **Zustand** for state management (with persistence)
-- **Anthropic Claude** for intent detection
-- **Claude Sonnet 3.5** model
+
+**Backend:**
+- **Express** for HTTP server
+- **Node.js** for runtime
+- **LLM Providers:** Anthropic Direct API or AWS Bedrock
+- **Model:** Claude Sonnet 4.5
 
 ## Configuration
 
@@ -137,6 +186,47 @@ Currently set to 0.8 (80%). To adjust:
 // src/components/RightPanel.tsx
 if (confidence >= 0.8) // Lower for more auto-switches
 ```
+
+### LLM Provider Selection
+
+The app uses a factory pattern to support multiple LLM providers. Configuration is handled via environment variables:
+
+**Provider Architecture:**
+- `llm-provider.ts` - Interface that all providers implement
+- `anthropic-provider.ts` - Direct Anthropic API implementation
+- `bedrock-provider.ts` - AWS Bedrock implementation
+- `llm-factory.ts` - Factory that instantiates the correct provider
+- `llm-config.ts` - Configuration loader
+
+**Switching Providers:**
+
+Change `VITE_LLM_PROVIDER` in your `.env.local`:
+
+```bash
+# Use Anthropic Direct API
+VITE_LLM_PROVIDER=anthropic
+
+# Use AWS Bedrock
+VITE_LLM_PROVIDER=bedrock
+```
+
+**Key Differences:**
+
+| Feature | Anthropic Direct | AWS Bedrock |
+|---------|------------------|-------------|
+| Setup | Simple API key | AWS credentials + region |
+| New Features | Immediate access | May have delays |
+| Pricing | Token-based | Token + AWS infrastructure |
+| Integration | Standalone | AWS ecosystem (IAM, VPC, etc.) |
+| SDK Package | `@anthropic-ai/sdk` | `@anthropic-ai/bedrock-sdk` |
+| Model Format | `claude-sonnet-4-5-20250929` | `anthropic.claude-sonnet-4-5-20250929-v1:0` |
+
+**Adding New Providers:**
+
+1. Create a new provider class implementing `LLMProvider` interface
+2. Add configuration to `llm-config.ts`
+3. Update `llm-factory.ts` with new provider case
+4. Update `.env.example` with new provider variables
 
 ## Development Notes
 
