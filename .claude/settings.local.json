@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(npm install:*)",
-      "Bash(lsof:*)"
+      "Bash(lsof:*)",
+      "WebFetch(domain:a2ui.org)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": []
